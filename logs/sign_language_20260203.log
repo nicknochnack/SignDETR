@@ -1,0 +1,4 @@
+2026-02-03 20:11:39,941 - sign_language - INFO - [realtime]📸 Image capture system initialized[/realtime]
+2026-02-03 20:11:39,943 - sign_language - INFO - [success]✅ Camera 0 connected successfully[/success]
+2026-02-03 20:11:39,943 - sign_language - INFO - [info]Output directory: ./data/train[/info]
+2026-02-03 20:11:59,210 - sign_language - INFO - [success]✅ Completed hello: 18/18 images captured[/success]

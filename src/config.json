@@ -1,8 +1,7 @@
 {
   "classes": [
     "hello",
-    "iloveyou",
-    "thankyou"
+    "I am fine"
   ],
   "colors": [
     [
@@ -14,11 +13,6 @@
       240,
       172,
       95
-    ],
-    [
-      131,
-      193,
-      103
     ]
   ]
 }

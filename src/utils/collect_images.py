@@ -96,4 +96,4 @@ class CaptureImages():
 
 if __name__ == '__main__': 
     cap = CaptureImages('./data/test', classes, 0) 
-    cap.run(num_images=30)
+    cap.run(num_images=25)

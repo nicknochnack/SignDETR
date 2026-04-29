@@ -1,104 +1,183 @@
+"""Real-time sign language detection: CameraHandler + GesturePredictor."""
+
+from __future__ import annotations
+
+import time
+from collections import deque
+
 import cv2
-import torch
-from torch import load
-from model import DETR
-import albumentations as A
-from utils.boxes import rescale_bboxes
-from utils.setup import get_classes, get_colors
+
+from camera_handler import CameraHandler
+from gesture_predictor import GesturePredictor
 from utils.logger import get_logger
-from utils.rich_handlers import DetectionHandler, create_detection_live_display
-import sys
-import time 
+from utils.rich_handlers import DetectionHandler
+
+# --- Tunables (no magic numbers in call sites) ---
+CHECKPOINT = "checkpoints/49_model.pt"
+BOX_THRESHOLD = 0.35
+DISPLAY_THRESHOLD = 0.20
+TEMPORAL_WINDOW = 10
+FPS_SMOOTH_FRAMES = 30
+WINDOW_NAME = "VoxDex - Live"
 
 
-# Initialize logger and handlers
-logger = get_logger("realtime")
-detection_handler = DetectionHandler()
+class RollingFPS:
+    """FPS from elapsed wall time over the last N frame timestamps."""
 
-logger.print_banner()
-logger.realtime("Initializing real-time sign language detection...")
+    def __init__(self, window: int = FPS_SMOOTH_FRAMES) -> None:
+        self._window = max(2, window)
+        self._t: deque[float] = deque(maxlen=self._window)
 
-transforms = A.Compose(
-        [   
-            A.Resize(224,224),
-            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            A.ToTensorV2()
-        ]
+    def tick(self) -> None:
+        self._t.append(time.perf_counter())
+
+    def fps(self) -> float:
+        if len(self._t) < 2:
+            return 0.0
+        dt = self._t[-1] - self._t[0]
+        if dt <= 0:
+            return 0.0
+        return (len(self._t) - 1) / dt
+
+
+def draw_overlay(
+    frame,
+    detections,
+    predictor: GesturePredictor,
+    stable_label: str,
+    stable_conf: float,
+    fps_value: float,
+    instant: tuple[str, float] | None,
+    display_threshold: float,
+) -> None:
+    """Single HUD bar + optional instant line; class-colored boxes (BGR)."""
+    _h, w = frame.shape[:2]
+    bar_h = 72
+    cv2.rectangle(frame, (0, 0), (w, bar_h), (30, 30, 30), -1)
+
+    instant_part = ""
+    if instant is not None:
+        instant_part = f"  |  now: {instant[0]} {instant[1]:.2f}"
+    else:
+        _lab, last_c = predictor.get_last_query()
+        instant_part = f"  |  now: {_lab} {last_c:.2f} (<= {display_threshold:.2f})"
+
+    line1 = (
+        f"VoxDex  |  stable: {stable_label}  {stable_conf:.2f}"
+        f"{instant_part}  |  FPS {fps_value:.1f}"
+    )
+    cv2.putText(
+        frame,
+        line1,
+        (12, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"boxes > {BOX_THRESHOLD:.2f}  |  display > {DISPLAY_THRESHOLD:.2f}",
+        (12, 54),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (180, 180, 180),
+        1,
+        cv2.LINE_AA,
     )
 
-model = DETR(num_classes=3)
-model.eval()
-model.load_pretrained('pretrained/4426_model.pt')
-CLASSES = get_classes() 
-COLORS = get_colors() 
+    for det in detections:
+        x1, y1, x2, y2 = (int(det.bbox_xyxy[0]), int(det.bbox_xyxy[1]), int(det.bbox_xyxy[2]), int(det.bbox_xyxy[3]))
+        color = predictor.color_bgr(det.class_index)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+        label = f"{det.label} {det.confidence:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+        y0 = max(bar_h + 4, y1 - 6)
+        cv2.rectangle(frame, (x1, y0 - th - 6), (x1 + tw + 8, y0 + 2), color, -1)
+        cv2.putText(
+            frame,
+            label,
+            (x1 + 4, y0),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
 
-logger.realtime("Starting camera capture...")
-cap = cv2.VideoCapture(0)
 
-# Initialize performance tracking
-frame_count = 0
-fps_start_time = time.time()
+def main() -> None:
+    logger = get_logger("realtime")
+    detection_handler = DetectionHandler()
+    logger.print_banner()
+    logger.realtime("Initializing VoxDex real-time detection...")
 
-while cap.isOpened(): 
-    ret, frame = cap.read()
-    if not ret:
-        logger.error("Failed to read frame from camera")
-        break
-        
-    # Time the inference
-    inference_start = time.time()
-    transformed = transforms(image=frame)
-    result = model(torch.unsqueeze(transformed['image'], dim=0))
-    inference_time = (time.time() - inference_start) * 1000  # Convert to ms
+    predictor = GesturePredictor(
+        CHECKPOINT,
+        box_threshold=BOX_THRESHOLD,
+        display_threshold=DISPLAY_THRESHOLD,
+        temporal_window=TEMPORAL_WINDOW,
+    )
+    camera = CameraHandler(0)
+    fps_counter = RollingFPS(FPS_SMOOTH_FRAMES)
 
-    probabilities = result['pred_logits'].softmax(-1)[:,:,:-1] 
-    max_probs, max_classes = probabilities.max(-1)
-    keep_mask = max_probs > 0.8
+    frame_count = 0
+    log_fps_start = time.time()
 
-    batch_indices, query_indices = torch.where(keep_mask) 
+    logger.realtime("Starting camera — press Q to quit.")
 
-    bboxes = rescale_bboxes(result['pred_boxes'][batch_indices, query_indices,:], (1920,1080))
-    classes = max_classes[batch_indices, query_indices]
-    probas = max_probs[batch_indices, query_indices]
+    try:
+        while True:
+            ok, frame = camera.read()
+            if not ok:
+                logger.error("Failed to read frame from camera")
+                break
 
-    # Prepare detection results for logging
-    detections = []
-    for bclass, bprob, bbox in zip(classes, probas, bboxes): 
-        bclass_idx = bclass.detach().numpy()
-        bprob_val = bprob.detach().numpy() 
-        x1,y1,x2,y2 = bbox.detach().numpy()
-        
-        detections.append({
-            'class': CLASSES[bclass_idx],
-            'confidence': float(bprob_val),
-            'bbox': [float(x1), float(y1), float(x2), float(y2)]
-        })
-        
-        # Draw bounding boxes on frame
-        frame = cv2.rectangle(frame, (int(x1),int(y1)), (int(x2),int(y2)), COLORS[bclass_idx], 10)
-        frame_text = f"{CLASSES[bclass_idx]} - {round(float(bprob_val),4)}"
-        frame = cv2.rectangle(frame, (int(x1),int(y1)-100), (int(x1)+700,int(y1)), COLORS[bclass_idx], -1)
-        frame = cv2.putText(frame, frame_text, (int(x1),int(y1)), cv2.FONT_HERSHEY_DUPLEX, 2, (255,255,255), 4, cv2.LINE_AA)
+            t0 = time.perf_counter()
+            detections = predictor.predict(frame)
+            infer_ms = (time.perf_counter() - t0) * 1000.0
 
-    # Calculate FPS
-    frame_count += 1
-    if frame_count % 30 == 0:  # Log every 30 frames
-        elapsed_time = time.time() - fps_start_time
-        fps = 30 / elapsed_time
-        
-        # Log detection results and performance
-        if detections:
-            detection_handler.log_detections(detections, frame_id=frame_count)
-        detection_handler.log_inference_time(inference_time, fps)
-        
-        # Reset FPS counter
-        fps_start_time = time.time()
+            stable_label, stable_conf = predictor.get_stable_prediction()
+            instant = predictor.get_instant_hud_best()
 
-    cv2.imshow('Frame', frame)
+            fps_counter.tick()
+            fps_val = fps_counter.fps()
 
-    if cv2.waitKey(1) & 0xFF == ord('q'): 
-        logger.realtime("Stopping real-time detection...")
-        break
+            draw_overlay(
+                frame,
+                detections,
+                predictor,
+                stable_label,
+                stable_conf,
+                fps_val,
+                instant,
+                DISPLAY_THRESHOLD,
+            )
 
-cap.release() 
-cv2.destroyAllWindows() 
+            frame_count += 1
+            if frame_count % 30 == 0:
+                elapsed = time.time() - log_fps_start
+                batch_fps = 30 / elapsed if elapsed > 0 else 0.0
+                if detections:
+                    detection_handler.log_detections(
+                        [
+                            {"class": d.label, "confidence": d.confidence, "bbox": list(d.bbox_xyxy)}
+                            for d in detections
+                        ],
+                        frame_id=frame_count,
+                    )
+                detection_handler.log_inference_time(infer_ms, batch_fps)
+                log_fps_start = time.time()
+
+            cv2.imshow(WINDOW_NAME, frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                logger.realtime("Stopping.")
+                break
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

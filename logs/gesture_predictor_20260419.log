@@ -1,0 +1,3 @@
+2026-04-19 15:31:51,049 - gesture_predictor - WARNING - [warning][gesture_predictor] Config defines 2 class name(s) but the checkpoint has 3 foreground class(es). Extra outputs map to unknown_<index> (not silent).[/warning]
+2026-04-19 15:42:27,049 - gesture_predictor - WARNING - [warning][gesture_predictor] Config defines 2 class name(s) but the checkpoint has 3 foreground class(es). Extra outputs map to unknown_<index> (not silent).[/warning]
+2026-04-19 15:45:55,746 - gesture_predictor - WARNING - [warning][gesture_predictor] Config defines 2 class name(s) but the checkpoint has 3 foreground class(es). Extra outputs map to unknown_<index> (not silent).[/warning]

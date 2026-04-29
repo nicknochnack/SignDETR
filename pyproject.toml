@@ -3,7 +3,7 @@ name = "28-07-2025-sign-language"
 version = "0.1.0"
 description = "A full walkthrough on training a sign language model."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10,<3.12"
 dependencies = [
     "albumentations>=2.0.8",
     "colorama>=0.4.6",
@@ -11,6 +11,8 @@ dependencies = [
     "jupyter>=1.1.1",
     "label-studio>=1.20.0",
     "matplotlib>=3.10.5",
+    "mediapipe==0.10.9",
+    "opencv-python>=4.11.0.86",
     "rich>=13.0.0",
     "torch>=2.8.0",
     "torchinfo>=1.8.0",

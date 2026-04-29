@@ -127,15 +127,19 @@ class DETR(nn.Module):
         self.model_handler.log_parameters_count(total_params, trainable_params)
         
     def load_pretrained(self, checkpoint_path: str):
-        """Load pretrained weights with logging."""
+        """Load pretrained weights with PyTorch 2.6 compatibility."""
         try:
-            self.load_state_dict(torch.load(checkpoint_path))
+            state_dict = torch.load(
+                checkpoint_path,
+                weights_only=False,
+                map_location="cpu"
+            )
+            self.load_state_dict(state_dict)
             self.model_handler.log_model_loading(checkpoint_path, success=True)
         except Exception as e:
             self.logger.error(f"Failed to load checkpoint: {str(e)}")
             self.model_handler.log_model_loading(checkpoint_path, success=False)
 
-
 if __name__ == '__main__': 
-    model = DETR(num_classes=3)
+    model = DETR(num_classes=2)
     summary(model, (5,3,224,224))
